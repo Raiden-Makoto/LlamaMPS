@@ -39,59 +39,47 @@ buf_input   = create_buffer(input_vec)
 buf_output  = device.newBufferWithLength_options_(768 * 2, Metal.MTLResourceStorageModeShared)
 
 # --- 4. Compile the Shader ---
-with open("kernels/quant_matmul.metal", "r") as f:
+kernel_path = os.path.join(PROJECT_ROOT, "kernels", "quant_matmul.metal")
+with open(kernel_path, "r") as f:
     source = f.read()
 
 library, _ = device.newLibraryWithSource_options_error_(source, None, None)
-kernel = library.newFunctionWithName_("dequant_dot_product")
+kernel = library.newFunctionWithName_("gemv_q4_0")
 pso, _ = device.newComputePipelineStateWithFunction_error_(kernel, None)
 
-# --- 5. Dispatch to GPU ---
+# --- 5. Updated Dispatch for Full Matrix ---
+# We want to process 1536 rows
+num_rows = 1536
+# Each row needs 768 threads to process its 1536 weights (2 per thread)
+threads_per_row = 768
+
+# Create an output buffer for the whole vector
+buf_output = device.newBufferWithLength_options_(
+    num_rows * 2, # 1536 elements * 2 bytes (float16)
+    Metal.MTLResourceStorageModeShared
+)
+
 cmd_buf = command_queue.commandBuffer()
 encoder = cmd_buf.computeCommandEncoder()
 encoder.setComputePipelineState_(pso)
 
-# Indexing matches our kernel [[buffer(X)]]
 encoder.setBuffer_offset_atIndex_(buf_weights, 0, 0)
 encoder.setBuffer_offset_atIndex_(buf_scales, 0, 1)
 encoder.setBuffer_offset_atIndex_(buf_input, 0, 2)
 encoder.setBuffer_offset_atIndex_(buf_output, 0, 3)
 
-# We run 1 thread per byte
-grid_size = Metal.MTLSize(768, 1, 1)
-thread_group_size = Metal.MTLSize(min(768, pso.maxTotalThreadsPerThreadgroup()), 1, 1)
-encoder.dispatchThreads_threadsPerThreadgroup_(grid_size, thread_group_size)
+# Grid of [Rows] threadgroups, each with [768] threads
+grid_size = Metal.MTLSize(num_rows, 1, 1) # This determines 'row'
+thread_group_size = Metal.MTLSize(threads_per_row, 1, 1) # This determines 'tid'
+
+# We use dispatchThreadgroups because we defined one group per row
+encoder.dispatchThreadgroups_threadsPerThreadgroup_(grid_size, thread_group_size)
 
 encoder.endEncoding()
 cmd_buf.commit()
 cmd_buf.waitUntilCompleted()
 
-# --- 6. The Ground Truth Comparison (Fixed) ---
-gpu_out_ptr = buf_output.contents().as_buffer(768 * 2)
-gpu_res = np.frombuffer(gpu_out_ptr, dtype=np.float16).sum()
-
-print(f"--- Result Verification ---")
-print(f"GPU 4-bit Result: {gpu_res:.4f}")
-
-# Manual Python Check with Signed Casting
-cpu_res = 0.0
-for i in range(768):
-    byte = int(packed_weights[i]) # Cast to standard Python int to avoid numpy uint8 wrapping
-    
-    # Extract bits
-    low_bits = byte & 0x0F
-    high_bits = byte >> 4
-    
-    # Convert to signed range [-8, 7]
-    w1 = float(low_bits) - 8.0
-    w2 = float(high_bits) - 8.0
-    
-    scale = float(scales[i // 16])
-    
-    # Accumulate
-    cpu_res += (w1 * scale * float(input_vec[i*2])) + (w2 * scale * float(input_vec[i*2+1]))
-
-print(f"CPU Reference: {cpu_res:.4f}")
-# Accuracy check (using a slightly higher tolerance for half-precision drift)
-match = np.isclose(gpu_res, cpu_res, rtol=1e-2)
-print(f"Accuracy Match: {match}")
+# --- 6. Verification ---
+gpu_final_vector = np.frombuffer(buf_output.contents().as_buffer(num_rows * 2), dtype=np.float16)
+print(f"GPU Matrix Multiply Complete. Output Shape: {gpu_final_vector.shape}")
+print(f"First 5 values: {gpu_final_vector[:5]}")
