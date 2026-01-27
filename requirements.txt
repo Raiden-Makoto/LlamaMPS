@@ -1,0 +1,6 @@
+torch
+safetensors
+huggingface-hub
+pyobjc-framework-Metal
+pyobjc-framework-Cocoa
+transformers

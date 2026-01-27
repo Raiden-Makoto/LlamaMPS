@@ -1,0 +1,9 @@
+*.pt
+*.safetensors
+__pycache__/
+.DS_Store
+*.py[cod]
+*$py.class
+*.bin
+*.air
+*.metallib
