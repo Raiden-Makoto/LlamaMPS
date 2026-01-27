@@ -1,4 +1,4 @@
-#include <metal_stdlib>
+#include <metal_stdlib> // error expected if not in xcode
 using namespace metal;
 
 // --- IDE Support Header (Doesn't affect GPU) ---
