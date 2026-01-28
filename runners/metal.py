@@ -1,6 +1,11 @@
 import Metal # type: ignore
 import numpy as np # type: ignore
 import os # type: ignore
+import sys # type: ignore
+
+_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _root)
+from utils.verify_attention import verify_attention_indexing
 
 # --- 1. Setup Metal Hardware ---
 device = Metal.MTLCreateSystemDefaultDevice()
@@ -50,6 +55,12 @@ buf_normed = device.newBufferWithLength_options_(1536 * 2, Metal.MTLResourceStor
 buf_q_out = device.newBufferWithLength_options_(1536 * 2, Metal.MTLResourceStorageModeShared)
 buf_k_out = device.newBufferWithLength_options_(256 * 2, Metal.MTLResourceStorageModeShared)
 buf_v_out = device.newBufferWithLength_options_(256 * 2, Metal.MTLResourceStorageModeShared)
+# Attention: 12 scores (one per Q head) for 1 token, float32
+buf_scores = device.newBufferWithLength_options_(12 * 4, Metal.MTLResourceStorageModeShared)
+current_seq_len = 1
+seq_len_buf = device.newBufferWithBytes_length_options_(
+    np.uint32(current_seq_len).tobytes(), 4, Metal.MTLResourceStorageModeShared
+)
 
 # --- 4. Compile Shaders ---
 def get_pso(filename, func_name):
@@ -71,6 +82,7 @@ def get_pso(filename, func_name):
 
 pso_norm = get_pso("rms_norm.metal", "rms_norm_q4")
 pso_gemv = get_pso("quant_matmul.metal", "gemv_q4_0")
+pso_attn = get_pso("attention.metal", "attention_scores")
 
 # --- 5. The Chain Execution ---
 cmd_buf = command_queue.commandBuffer()
@@ -108,6 +120,14 @@ encoder.setBuffer_offset_atIndex_(buf_normed, 0, 2)
 encoder.setBuffer_offset_atIndex_(buf_v_out, 0, 3)
 encoder.dispatchThreadgroups_threadsPerThreadgroup_(Metal.MTLSize(256, 1, 1), Metal.MTLSize(768, 1, 1))
 
+# Pass 3: Attention scores (12 Q heads, 1 token)
+encoder.setComputePipelineState_(pso_attn)
+encoder.setBuffer_offset_atIndex_(buf_q_out, 0, 0)
+encoder.setBuffer_offset_atIndex_(buf_k_out, 0, 1)
+encoder.setBuffer_offset_atIndex_(buf_scores, 0, 2)
+encoder.setBuffer_offset_atIndex_(seq_len_buf, 0, 3)
+encoder.dispatchThreads_threadsPerThreadgroup_(Metal.MTLSize(12, 1, 1), Metal.MTLSize(12, 1, 1))
+
 encoder.endEncoding()
 cmd_buf.commit()
 cmd_buf.waitUntilCompleted()
@@ -120,3 +140,13 @@ print("Pipeline Complete.")
 print(f"Q (first 5): {q_out[:5]}")
 print(f"K (first 5): {k_out[:5]}")
 print(f"V (first 5): {v_out[:5]}")
+
+# --- 7. Attention Score Verification ---
+scores_ptr = buf_scores.contents().as_buffer(12 * 4)
+gpu_scores = np.frombuffer(scores_ptr, dtype=np.float32)
+print("--- Attention Score Verification ---")
+print(f"GPU Raw Scores: {gpu_scores}")
+cpu_scores = verify_attention_indexing(q_out, k_out)
+print(f"CPU Reference:  {cpu_scores}")
+match = np.allclose(gpu_scores, cpu_scores, atol=1e-2)
+print(f"Indexing Match: {match}")
