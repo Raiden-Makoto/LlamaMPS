@@ -22,7 +22,7 @@ kernel void rms_norm_q4(
     float sum_sq = simd_sum(sq_val);
     threadgroup float shared_sums[32];
 
-    if ((tid % 32) == 0){{
+    if ((tid % 32) == 0) {
         shared_sums[tid / 32] = sum_sq;
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
