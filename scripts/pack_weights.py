@@ -2,6 +2,7 @@ import os
 import torch # type: ignore
 import numpy as np # type: ignore
 from safetensors.torch import load_file # type: ignore
+import warnings
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WEIGHT_PATH = os.path.join(PROJECT_ROOT, "weights", "model.safetensors")
@@ -12,14 +13,18 @@ TENSOR_NAMES = [
     "model.layers.0.self_attn.q_proj.weight",
     "model.layers.0.self_attn.k_proj.weight",
     "model.layers.0.self_attn.v_proj.weight",
+    "model.layers.0.self_attn.o_proj.weight",
+    "model.layers.0.self_attn.c_proj.weight",
 ]
 
 
 def pack_tensor_4bit(path: str, tensor_name: str):
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"File not found: {path}")
     print(f"Loading {tensor_name}...")
-    weights = load_file(path)[tensor_name].to(torch.float32)
+    try:
+        weights = load_file(path)[tensor_name].to(torch.float32)
+    except KeyError:
+        warnings.warn(f"Tensor not found: {tensor_name}. Skipping...")
+        return
     flat = weights.flatten()
     pad_len = (BLOCK_SIZE - (len(flat) % BLOCK_SIZE)) % BLOCK_SIZE
     if pad_len: flat = torch.cat([flat, torch.zeros(pad_len)])
