@@ -5,18 +5,8 @@ from safetensors.torch import load_file # type: ignore
 import warnings
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-WEIGHT_PATH = os.path.join(PROJECT_ROOT, "weights", "model.safetensors")
 
 BLOCK_SIZE = 32  # industry standard
-
-TENSOR_NAMES = [
-    "model.layers.0.self_attn.q_proj.weight",
-    "model.layers.0.self_attn.k_proj.weight",
-    "model.layers.0.self_attn.v_proj.weight",
-    "model.layers.0.self_attn.o_proj.weight",
-    "model.layers.0.self_attn.c_proj.weight",
-]
-
 
 def pack_tensor_4bit(path: str, tensor_name: str):
     print(f"Loading {tensor_name}...")
@@ -44,8 +34,10 @@ def pack_tensor_4bit(path: str, tensor_name: str):
     low_half = u_weights[0::2]
     high_half = u_weights[1::2]
     packed = (low_half | (high_half << 4)).numpy().astype(np.uint8)
-    # Save Artifacts (basename from tensor, e.g. q_proj -> q_proj_4bit.bin)
-    base = tensor_name.replace("model.layers.0.self_attn.", "").replace(".weight", "")
+    # Save Artifacts (basename from tensor, e.g. *.q_proj.weight -> q_proj_4bit.bin)
+    # Strip trailing ".weight" if present, then take the last dotted segment
+    stem = tensor_name.rsplit(".", 1)[0]
+    base = stem.split(".")[-1]
     out_dir = os.path.join(PROJECT_ROOT, "weights")
     os.makedirs(out_dir, exist_ok=True)
     packed_path = os.path.join(out_dir, f"{base}_4bit.bin")
@@ -54,8 +46,3 @@ def pack_tensor_4bit(path: str, tensor_name: str):
     scales.numpy().astype(np.float16).tofile(scales_path)
     print(f"Saved {tensor_name} to {packed_path}")
     print(f"Saved scales to {scales_path}")
-
-
-if __name__ == "__main__":
-    for name in TENSOR_NAMES:
-        pack_tensor_4bit(WEIGHT_PATH, name)
