@@ -12,14 +12,15 @@ from utils.pack_weights import pack_tensor_4bit
 
 BLOCK_SIZE = 32  # industry standard
 
-TENSOR_NAMES = [
-    "model.layers.0.self_attn.q_proj.weight",
-    "model.layers.0.self_attn.k_proj.weight",
-    "model.layers.0.self_attn.v_proj.weight",
-    "model.layers.0.self_attn.o_proj.weight",
-    "model.layers.0.self_attn.c_proj.weight",
-]
-
-if __name__ == "__main__":
+def extract_attn(layer: int):
+    print(f"Extracting Attention weights for layer {layer}...")
+    TENSOR_NAMES = [
+        f"model.layers.{layer}.self_attn.q_proj.weight",
+        f"model.layers.{layer}.self_attn.k_proj.weight",
+        f"model.layers.{layer}.self_attn.v_proj.weight",
+        f"model.layers.{layer}.self_attn.o_proj.weight",
+        f"model.layers.{layer}.self_attn.c_proj.weight",
+    ]
     for name in TENSOR_NAMES:
         pack_tensor_4bit(WEIGHT_PATH, name)
+    print(f"Extracted Attention weights for layer {layer}")

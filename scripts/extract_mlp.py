@@ -11,12 +11,13 @@ from utils.pack_weights import pack_tensor_4bit
 
 BLOCK_SIZE = 32  # industry standard
 
-TENSOR_NAMES = [
-    "model.layers.0.mlp.down_proj.weight",
-    "model.layers.0.mlp.up_proj.weight",
-    "model.layers.0.mlp.gate_proj.weight",
-]
-
-if __name__ == "__main__":
+def extract_mlp(layer: int):
+    print(f"Extracting MLP weights for layer {layer}...")
+    TENSOR_NAMES = [
+        f"model.layers.{layer}.mlp.down_proj.weight",
+        f"model.layers.{layer}.mlp.up_proj.weight",
+        f"model.layers.{layer}.mlp.gate_proj.weight",
+    ]
     for name in TENSOR_NAMES:
         pack_tensor_4bit(WEIGHT_PATH, name)
+    print(f"Extracted MLP weights for layer {layer}")
