@@ -10,41 +10,46 @@ using namespace metal;
 #define thread_position_in_grid 0
 #endif
 
-// Optimized GEMV for 4-bit block-quantized weights
+// GEMV for 4-bit block-quantized weights. Constants passed via buffer(4): [K, simd_groups, threads].
+// K = columns (1536 or 8960). simd_groups = threads/32. threads = threads_per_threadgroup (e.g. 768).
 kernel void gemv_q4_0(
-    device const uchar* packed_weights [[buffer(0)]], // [Rows * 768 bytes]
-    device const half* scales          [[buffer(1)]], // [Rows * 48 scales]
-    device const half* input_vector    [[buffer(2)]], // [1536 elements]
+    device const uchar* packed_weights [[buffer(0)]], // [Rows * (K/2) bytes]
+    device const half* scales          [[buffer(1)]], // [Rows * (K/32) scales]
+    device const half* input_vector   [[buffer(2)]], // [K elements]
     device half* output_vector         [[buffer(3)]], // [Rows elements]
+    device const uint* constants      [[buffer(4)]], // [K, simd_groups, threads]
     uint tid [[thread_index_in_threadgroup]],
-    uint row [[threadgroup_position_in_grid]]) 
+    uint row [[threadgroup_position_in_grid]])
 {
-    // 1. Point to the start of THIS row
-    // Each row has 1536 weights -> 768 bytes
-    device const uchar* row_weights = packed_weights + (row * 768);
-    // 1536 weights / 32 block size = 48 scales per row
-    device const half* row_scales = scales + (row * 48);
+    uint k = constants[0];
+    uint simd_groups = constants[1];
+    uint threads = constants[2];
+    uint bytes_per_row = k / 2;
+    uint scales_per_row = k / 32;
 
-    // 2. Each thread calculates partial sum for 2 weights (1 byte)
-    // We assume 768 threads per threadgroup
+    device const uchar* row_weights = packed_weights + (row * bytes_per_row);
+    device const half* row_scales = scales + (row * scales_per_row);
+
+    uint stride = (bytes_per_row + threads - 1) / threads;
     half thread_sum = 0.0h;
-    if (tid < 768) {
-        uchar packed = row_weights[tid];
+    for (uint i = 0; i < stride; i++) {
+        uint byte_idx = tid + i * threads;
+        if (byte_idx >= bytes_per_row) break;
+
+        uchar packed = row_weights[byte_idx];
         half w_low  = (half)((packed & 0x0f) - 8);
         half w_high = (half)((packed >> 4) - 8);
-        
-        half scale = row_scales[tid / 16]; // 16 threads = 32 weights = 1 block
-        
-        thread_sum = (w_low * scale * input_vector[tid * 2]) + 
-                     (w_high * scale * input_vector[tid * 2 + 1]);
+
+        uint block_idx = byte_idx / 16;
+        half scale = row_scales[block_idx];
+
+        thread_sum += (w_low * scale * input_vector[byte_idx * 2]) +
+                      (w_high * scale * input_vector[byte_idx * 2 + 1]);
     }
 
-    // 3. Sigma Move: SIMD Reduction
-    // sum the values across all threads in the SIMD-group (usually 32 threads)
     thread_sum = simd_sum(thread_sum);
 
-    // 4. Threadgroup Reduction (Final Sum for the Row)
-    threadgroup half shared_sums[32]; // 768 threads / 32 = 24 SIMD groups
+    threadgroup half shared_sums[32];
     uint simd_id = tid / 32;
     uint lane_id = tid % 32;
 
@@ -54,10 +59,9 @@ kernel void gemv_q4_0(
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    // Final thread in the group writes the result to global memory
     if (tid == 0) {
         half final_row_sum = 0.0h;
-        for (uint i = 0; i < 24; i++) { // 24 = 768 / 32
+        for (uint i = 0; i < simd_groups; i++) {
             final_row_sum += shared_sums[i];
         }
         output_vector[row] = final_row_sum;

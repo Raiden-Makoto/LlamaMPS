@@ -14,7 +14,7 @@ kernel void attention_scores(
     device const half* q_vec         [[buffer(0)]], // [1536]
     device const half* k_cache       [[buffer(1)]], // [MaxSeq * 256]
     device float* scores             [[buffer(2)]], // [12 heads * MaxSeq]
-    constant uint& current_seq_len   [[buffer(3)]],
+    device const uint* seq_len       [[buffer(3)]],
     uint tid [[thread_position_in_grid]]) // tid = query_head_index
 {
     // 1. Identify which K head to use (GQA logic)
@@ -28,6 +28,7 @@ kernel void attention_scores(
     // 3. Dot Product Loop
     // For now, we only have 1 token in the sequence (current_seq_len = 1)
     // When we do actual inference this will be much mofr advanced
+    uint current_seq_len = seq_len[0];
     for (uint i = 0; i < current_seq_len; i++) {
         device const half* k_ptr = k_cache + (i * 256) + (k_head * 128);
         
@@ -36,8 +37,6 @@ kernel void attention_scores(
             dot += (float)q_ptr[d] * (float)k_ptr[d];
         }
         
-        // 4. Scale by 1/sqrt(head_dim) to keep Softmax stable
-        // sqrt(128) is ~11.31
         scores[q_head * current_seq_len + i] = dot * 0.088388f; 
     }
 }

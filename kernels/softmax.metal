@@ -13,9 +13,10 @@ using namespace metal;
 // using online softmax for efficiency
 kernel void softmax(
     device float* scores [[buffer(0)]],
-    constant uint& current_seq_len [[buffer(1)]],
+    device const uint* seq_len [[buffer(1)]],
     uint tid [[thread_position_in_grid]]
 ){
+    uint current_seq_len = seq_len[0];
     uint head_offset = tid * current_seq_len;
     device float* head_scores = scores + head_offset;
     // Find Max for Numerical Stability
