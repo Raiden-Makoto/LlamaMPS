@@ -31,25 +31,26 @@ kernel void gemv_q4_0(
     device const half* row_scales = scales + (row * scales_per_row);
 
     uint stride = (bytes_per_row + threads - 1) / threads;
-    half thread_sum = 0.0h;
+    float thread_sum = 0.0f;
     for (uint i = 0; i < stride; i++) {
         uint byte_idx = tid + i * threads;
         if (byte_idx >= bytes_per_row) break;
 
         uchar packed = row_weights[byte_idx];
-        half w_low  = (half)((packed & 0x0f) - 8);
-        half w_high = (half)((packed >> 4) - 8);
+        float w_low  = (float)((packed & 0x0f) - 8);
+        float w_high = (float)((packed >> 4) - 8);
 
         uint block_idx = byte_idx / 16;
-        half scale = row_scales[block_idx];
+        float scale = (float)row_scales[block_idx];
 
-        thread_sum += (w_low * scale * input_vector[byte_idx * 2]) +
-                      (w_high * scale * input_vector[byte_idx * 2 + 1]);
+        float x0 = (float)input_vector[byte_idx * 2];
+        float x1 = (float)input_vector[byte_idx * 2 + 1];
+        thread_sum += (w_low * scale * x0) + (w_high * scale * x1);
     }
 
     thread_sum = simd_sum(thread_sum);
 
-    threadgroup half shared_sums[32];
+    threadgroup float shared_sums[32];
     uint simd_id = tid / 32;
     uint lane_id = tid % 32;
 
@@ -60,10 +61,10 @@ kernel void gemv_q4_0(
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
     if (tid == 0) {
-        half final_row_sum = 0.0h;
+        float final_row_sum = 0.0f;
         for (uint i = 0; i < simd_groups; i++) {
             final_row_sum += shared_sums[i];
         }
-        output_vector[row] = final_row_sum;
+        output_vector[row] = (half)final_row_sum;
     }
 }

@@ -12,16 +12,22 @@ using namespace metal;
 
 // RMS Norm for 4-bit quantized weights
 kernel void rms_norm_q4(
-    device const half* input  [[buffer(0)]], // Input vector (1536)
-    device const half* weight [[buffer(1)]], // Norm weights (1536)
-    device half* output       [[buffer(2)]], // Normalized output (1536)
+    device const half* input  [[buffer(0)]],
+    device const half* weight [[buffer(1)]],
+    device half* output       [[buffer(2)]],
     uint tid [[thread_position_in_grid]]
 ){
-    float val = (float) input[tid];
-    float sq_val = val * val;
-    float sum_sq = simd_sum(sq_val);
-    threadgroup float shared_sums[32];
+    // Use 768 threads per group; each thread handles 2 elements.
+    // This keeps the whole reduction within a single threadgroup (Metal max is typically 1024).
+    uint idx0 = tid * 2;
+    uint idx1 = idx0 + 1;
 
+    float v0 = (float)input[idx0];
+    float v1 = (float)input[idx1];
+    float sum_sq = simd_sum(v0 * v0 + v1 * v1);
+
+    // 768 threads / 32 lanes = 24 SIMD groups
+    threadgroup float shared_sums[24];
     if ((tid % 32) == 0) {
         shared_sums[tid / 32] = sum_sq;
     }
@@ -29,12 +35,14 @@ kernel void rms_norm_q4(
 
     threadgroup float final_scale;
     if (tid == 0){
-        float total_sum_sq = 0;
-        for (int i = 0; i < 48; i++) total_sum_sq += shared_sums[i];
-        // RMS Formula: 1 / sqrt(mean(x^2) + epsilon)
-        // Qwen 2.5 uses 1e-6 as epsilon
+        float total_sum_sq = 0.0f;
+        for (uint i = 0; i < 24; i++) total_sum_sq += shared_sums[i];
         final_scale = rsqrt(total_sum_sq / 1536.0f + 1e-6f);
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    output[tid] = (half)(val * final_scale) * weight[tid];
+
+    float w0 = (float)weight[idx0];
+    float w1 = (float)weight[idx1];
+    output[idx0] = (half)(v0 * final_scale * w0);
+    output[idx1] = (half)(v1 * final_scale * w1);
 }

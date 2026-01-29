@@ -11,22 +11,18 @@ using namespace metal;
 
 // RoPE for 4-bit quantized weights
 kernel void apply_rope_q4(
-    device half* vec [[buffer(0)]], // Input vector (1536)
+    device half* vec [[buffer(0)]],
+    constant uint& current_pos [[buffer(1)]], // Passed from engine.py
     uint tid [[thread_position_in_grid]]
 ){
-    // Each thread handles ONE PAIR of elements (e.g., 0 and 1, 2 and 3)
-    // For a head_dim of 128, we have 64 pairs per head.
     uint idx = tid * 2;
+    float m = (float)current_pos; 
     
-    // Position m (currently assuming we are at the first token: m=0)
-    // We will pass 'm' as a constant once we start generating multiple tokens.
-    float m = 0.0f; 
-    
-    // Frequency calculation for this specific pair
-    // Qwen uses base 10000.0 or 1000000.0 depending on context window
-    // We will use the smaller value
-    float theta_base = 10000.0f;
+    // Qwen 2.5 uses base 1000000.0 for 1.5B model to support long context
+    float theta_base = 1000000.0f;
     float head_dim = 128.0f;
+    
+    // Calculate frequency based on the specific dimension pair
     float theta = m * pow(theta_base, -((float)(idx % 128) / head_dim));
 
     float cos_theta = cos(theta);
@@ -35,7 +31,7 @@ kernel void apply_rope_q4(
     float x1 = (float)vec[idx];
     float x2 = (float)vec[idx + 1];
 
-    // Apply the rotation matrix
+    // Apply rotation
     vec[idx]     = (half)(x1 * cos_theta - x2 * sin_theta);
     vec[idx + 1] = (half)(x1 * sin_theta + x2 * cos_theta);
 }

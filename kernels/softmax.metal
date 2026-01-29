@@ -13,25 +13,28 @@ using namespace metal;
 // using online softmax for efficiency
 kernel void softmax(
     device float* scores [[buffer(0)]],
-    device const uint* seq_len [[buffer(1)]],
-    uint tid [[thread_position_in_grid]]
+    constant uint& current_pos [[buffer(1)]],
+    uint tid [[thread_position_in_grid]] // Head index (0-11)
 ){
-    uint current_seq_len = seq_len[0];
-    uint head_offset = tid * current_seq_len;
+    const uint max_seq_len = 1024;
+    uint head_offset = tid * max_seq_len;
     device float* head_scores = scores + head_offset;
-    // Find Max for Numerical Stability
+    
+    // 1. Find Max up to current_pos for stability
     float max_val = -INFINITY;
-    for (uint i = 0; i < current_seq_len; i++) {
+    for (uint i = 0; i <= current_pos; i++) {
         if (head_scores[i] > max_val) max_val = head_scores[i];
     }
-    // Sum of Exponentials
+    
+    // 2. Sum Exponentials
     float sum = 0.0f;
-    for (uint i = 0; i < current_seq_len; i++) {
+    for (uint i = 0; i <= current_pos; i++) {
         head_scores[i] = exp(head_scores[i] - max_val);
         sum += head_scores[i];
     }
-    // Normalize
-    for (uint i = 0; i < current_seq_len; i++) {
+    
+    // 3. Normalize active tokens
+    for (uint i = 0; i <= current_pos; i++) {
         head_scores[i] /= sum;
     }
 }

@@ -7,7 +7,9 @@ TARGET_DIR = "./weights"
 FILES = [
     "model.safetensors",
     "tokenizer.json",
+    "tokenizer_config.json",
     "config.json",
+    "generation_config.json",
 ]
 
 def download_model():

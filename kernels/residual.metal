@@ -16,5 +16,7 @@ kernel void residual_add(
     device half* output [[buffer(2)]],
     uint tid [[thread_position_in_grid]])
 {
-    output[tid] = x[tid] + attn_x[tid];
+    float a = (float)x[tid];
+    float b = (float)attn_x[tid];
+    output[tid] = (half)(a + b);
 }

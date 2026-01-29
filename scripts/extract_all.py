@@ -26,10 +26,12 @@ def copy_layer_weights(layer: int) -> None:
     common_bins = [
         # Attention QKVOC
         "q_proj_4bit.bin", "q_proj_scales.bin",
+        "q_proj_bias.bin",
         "k_proj_4bit.bin", "k_proj_scales.bin",
+        "k_proj_bias.bin",
         "v_proj_4bit.bin", "v_proj_scales.bin",
+        "v_proj_bias.bin",
         "o_proj_4bit.bin", "o_proj_scales.bin",
-        "c_proj_4bit.bin", "c_proj_scales.bin",
         # MLP gate / up / down
         "gate_proj_4bit.bin", "gate_proj_scales.bin",
         "up_proj_4bit.bin", "up_proj_scales.bin",
