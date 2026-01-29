@@ -30,7 +30,6 @@ def extract_tied_weights(model_path: str, output_dir: str) -> None:
     # 3. Output Head (4-bit Quantization)
     # Even though it's the same data, we pack it for the GEMV kernel
     print("Packing LM Head (shared weights)...")
-    # Uses the shared packer; writes to PROJECT_ROOT/weights as with layer packers.
     pack_tensor_4bit(model_path, "model.embed_tokens.weight")
     print(f"Global weights extracted to {output_dir}")
 

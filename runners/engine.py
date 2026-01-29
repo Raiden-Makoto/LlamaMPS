@@ -6,6 +6,7 @@ import sys  # type: ignore
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HIDDEN_DIM = 1536
 MLP_INTERMEDIATE = 8960
+VOCAB_SIZE = 151936
 NUM_LAYERS = 28
 NUM_Q_HEADS = 12
 NUM_KV_HEADS = 2
@@ -47,6 +48,17 @@ class QwenEngine:
         }
 
         self._create_buffer_pool()
+
+        global_dir = os.path.join(self.weights_dir, "global")
+        final_norm = load_bin(os.path.join(global_dir, "final_norm.bin"), np.float16)
+        self.buf_final_norm = self._create_buffer(final_norm)
+
+        self.lm_head_packed = load_bin(os.path.join(self.weights_dir, "embed_tokens_4bit.bin"))
+        self.lm_head_scales = load_bin(os.path.join(self.weights_dir, "embed_tokens_scales.bin"), np.float16)
+        self.buf_lm_head_packed = self._create_buffer(self.lm_head_packed)
+        self.buf_lm_head_scales = self.device.newBufferWithLength_options_(len(self.lm_head_scales) * 2, Metal.MTLResourceStorageModeShared)
+        dest = np.frombuffer(self.buf_lm_head_scales.contents().as_buffer(len(self.lm_head_scales) * 2), dtype=np.uint8)
+        dest[:] = self.lm_head_scales.view(np.uint8)
 
         self.buf_const_1536 = self._create_buffer(np.array([1536, GEMV_SIMD_GROUPS, GEMV_THREADS], dtype=np.uint32))
         self.buf_const_8960 = self._create_buffer(np.array([8960, GEMV_SIMD_GROUPS, GEMV_THREADS], dtype=np.uint32))
@@ -137,6 +149,7 @@ class QwenEngine:
         self.buf_scales_o = self.device.newBufferWithLength_options_(self.hidden_dim * 48 * 2, Metal.MTLResourceStorageModeShared)
         self.buf_input_norm = self.device.newBufferWithLength_options_(self.hidden_dim * 2, Metal.MTLResourceStorageModeShared)
         self.buf_post_norm = self.device.newBufferWithLength_options_(self.hidden_dim * 2, Metal.MTLResourceStorageModeShared)
+        self.buf_logits = self.device.newBufferWithLength_options_(VOCAB_SIZE * 2, Metal.MTLResourceStorageModeShared)
 
     def _upload_layer_weights(self, layer_idx: int) -> None:
         w = self.layer_weights[layer_idx]
@@ -169,7 +182,29 @@ class QwenEngine:
         for i in range(self.layers):
             self._execute_transformer_block(i)
 
-        result = np.frombuffer(self.buf_residual.contents().as_buffer(self.hidden_dim * 2), dtype=np.float16).copy()
+        # Global RMSNorm (model.norm.weight) before classifier
+        cmd_buf = self.cmd_queue.commandBuffer()
+        encoder = cmd_buf.computeCommandEncoder()
+        encoder.setComputePipelineState_(self.kernels["norm"])
+        encoder.setBuffer_offset_atIndex_(self.buf_residual, 0, 0)
+        encoder.setBuffer_offset_atIndex_(self.buf_final_norm, 0, 1)
+        encoder.setBuffer_offset_atIndex_(self.buf_x, 0, 2)
+        encoder.dispatchThreads_threadsPerThreadgroup_(Metal.MTLSize(self.hidden_dim, 1, 1), Metal.MTLSize(768, 1, 1))
+
+        # LM Head: 1536 -> 151936 (vocab logits). K=1536, Rows=151936.
+        encoder.setComputePipelineState_(self.kernels["gemv"])
+        encoder.setBuffer_offset_atIndex_(self.buf_lm_head_packed, 0, 0)
+        encoder.setBuffer_offset_atIndex_(self.buf_lm_head_scales, 0, 1)
+        encoder.setBuffer_offset_atIndex_(self.buf_x, 0, 2)
+        encoder.setBuffer_offset_atIndex_(self.buf_logits, 0, 3)
+        encoder.setBuffer_offset_atIndex_(self.buf_const_1536, 0, 4)
+        encoder.dispatchThreadgroups_threadsPerThreadgroup_(Metal.MTLSize(VOCAB_SIZE, 1, 1), Metal.MTLSize(GEMV_THREADS, 1, 1))
+
+        encoder.endEncoding()
+        cmd_buf.commit()
+        cmd_buf.waitUntilCompleted()
+
+        result = np.frombuffer(self.buf_logits.contents().as_buffer(VOCAB_SIZE * 2), dtype=np.float16).copy()
         return result
 
     def _execute_transformer_block(self, layer_idx: int) -> None:
